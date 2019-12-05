@@ -1,0 +1,11 @@
+[package]
+name = "pycall"
+version = "0.1.0"
+authors = ["Pierre Avital <pierre.avital@valeo.com>"]
+edition = "2018"
+description = "Python Codegen for Rust"
+license = "MPL-2.0"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tempfile = "3.1.0"
