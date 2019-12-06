@@ -15,7 +15,7 @@ macro_rules! as_py_lit_impl {
     };
 }
 
-as_py_lit_impl!(str, "\"{}\"");
+as_py_lit_impl!(str, "\"\"\"{}\"\"\"");
 as_py_lit_impl!(u8, "{}");
 as_py_lit_impl!(u16, "{}");
 as_py_lit_impl!(u32, "{}");
@@ -53,11 +53,6 @@ impl std::fmt::Display for Indents {
     }
 }
 
-pub struct PythonProgram {
-    file: tempfile::NamedTempFile,
-    indents: Indents,
-}
-
 struct PythonLitteral<'l, T: AsPythonLitteral + ?Sized>(pub &'l T);
 impl<'l, T: AsPythonLitteral + ?Sized> Display for PythonLitteral<'l, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
@@ -65,7 +60,50 @@ impl<'l, T: AsPythonLitteral + ?Sized> Display for PythonLitteral<'l, T> {
     }
 }
 
+pub struct JoinGuard<T>(Option<std::thread::JoinHandle<T>>);
+
+impl<T> JoinGuard<T> {
+    pub fn new() -> Self {
+        JoinGuard(None)
+    }
+
+    pub fn spawn<F: FnOnce() -> T>(f: F) -> Self
+    where
+        T: Send + 'static,
+        F: Send + 'static,
+    {
+        JoinGuard(Some(std::thread::spawn(f)))
+    }
+
+    pub fn join(mut self) -> Result<T, Box<dyn std::any::Any + Send>>
+    where
+        T: std::any::Any + Send + 'static,
+    {
+        self.0.take().unwrap().join()
+    }
+
+    pub fn detach(mut self) -> Option<std::thread::JoinHandle<T>> {
+        self.0.take()
+    }
+}
+
+impl<T> Drop for JoinGuard<T> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.join();
+        }
+    }
+}
+
+/// An instance of code generation unit.
+/// It really is just a file with dedicated APIs to write Python into it.
+/// Most importantly: it manages indentation for you.
+pub struct PythonProgram {
+    file: tempfile::NamedTempFile,
+    indents: Indents,
+}
 impl PythonProgram {
+    /// Creates a named temp file to store the generated python program
     pub fn new() -> PythonProgram {
         PythonProgram {
             file: tempfile::NamedTempFile::new().unwrap(),
@@ -73,18 +111,27 @@ impl PythonProgram {
         }
     }
 
+    /// Runs the program using python3
     pub fn run(&self) -> Result<std::process::Output, std::io::Error> {
         std::process::Command::new("python3")
             .arg(self.file.path())
             .output()
     }
 
+    /// Spawns a thread to run the program using python3.
+    /// The returned JoinGuard ensures that the program will be ran to completion.
+    pub fn background_run(self) -> JoinGuard<Result<std::process::Output, std::io::Error>> {
+        JoinGuard::spawn(move || self.run())
+    }
+
+    /// Ensures that the internal file has been flushed. Typically not necessary.
     pub fn flush(&mut self) -> &mut Self {
         self.file.flush().unwrap();
         self
     }
 
-    fn indent(&mut self, n: isize) -> &mut Self {
+    /// Moves the indentation level by `n`. However, I recommend using the dedicated functions when possible/
+    pub fn indent(&mut self, n: isize) -> &mut Self {
         if n >= 0 {
             self.indents.0 += n as isize
         } else {
@@ -93,10 +140,13 @@ impl PythonProgram {
         self
     }
 
+    /// Removes one indentation level from the cursor.
+    /// You should call this whenever you're done with a scope.
     pub fn end_block(&mut self) -> &mut Self {
         self.indent(-1)
     }
 
+    /// Writes a line assigning `value` formatted as a python literal to `name`
     pub fn define_variable<T: AsPythonLitteral + ?Sized>(
         &mut self,
         name: &str,
@@ -113,29 +163,52 @@ impl PythonProgram {
         self
     }
 
+    /// Writes an import statement for your `dependency`
+    pub fn import(&mut self, dependency: &str) -> &mut Self {
+        writeln!(&mut self.file, "{}import {}", self.indents, dependency).unwrap();
+        self
+    }
+
+    /// Writes an import statement for your `dependency` as `rename`
+    pub fn import_as(&mut self, dependency: &str, rename: &str) -> &mut Self {
+        writeln!(
+            &mut self.file,
+            "{}import {} as {}",
+            self.indents, dependency, rename
+        )
+        .unwrap();
+        self
+    }
+
+    /// Writes whatever line you passed it, indented at the proper level.
     pub fn write_line(&mut self, line: &str) -> &mut Self {
         writeln!(&mut self.file, "{}{}", self.indents, line).unwrap();
         self
     }
 
+    /// Writes an if, using your condition as a test, and increments indentation.
     pub fn r#if(&mut self, condition: &str) -> &mut Self {
         writeln!(&mut self.file, "{}if {}:", self.indents, condition).unwrap();
         self.indent(1)
     }
+    /// Decrements indentation, writes an elif, using your condition as a test, and increments indentation.
     pub fn elif(&mut self, condition: &str) -> &mut Self {
         self.indent(-1);
         writeln!(&mut self.file, "{}elif {}:", self.indents, condition).unwrap();
         self.indent(1)
     }
+    /// Decrements indentation, writes an else, using your condition as a test, and increments indentation.
     pub fn r#else(&mut self) -> &mut Self {
         self.indent(-1).write_line("else:").indent(1)
     }
 
+    /// Writes "for `range`:", and increments indentation.
     pub fn r#for(&mut self, range: &str) -> &mut Self {
         writeln!(&mut self.file, "{}for {}:", self.indents, range).unwrap();
         self.indent(1)
     }
 
+    /// Writes a while, using your condition as a test, and increments indentation.
     pub fn r#while(&mut self, condition: &str) -> &mut Self {
         writeln!(&mut self.file, "{}while {}:", self.indents, condition).unwrap();
         self.indent(1)
@@ -163,9 +236,93 @@ impl Display for PythonProgram {
         Ok(())
     }
 }
+
+pub trait MatPlotLib {
+    fn import_pyplot_as_plt(&mut self) -> &mut Self;
+    fn plot_y<Y: AsPythonLitteral>(&mut self, y: &Y) -> &mut Self;
+    fn plot_xy<X: AsPythonLitteral, Y: AsPythonLitteral>(&mut self, x: &X, y: &Y) -> &mut Self;
+    fn plot_xyargs<X: AsPythonLitteral, Y: AsPythonLitteral>(
+        &mut self,
+        x: &X,
+        y: &Y,
+        args: &str,
+    ) -> &mut Self;
+    fn semilogy_y<Y: AsPythonLitteral>(&mut self, y: &Y) -> &mut Self;
+    fn semilogy_xy<X: AsPythonLitteral, Y: AsPythonLitteral>(&mut self, x: &X, y: &Y) -> &mut Self;
+    fn semilogy_xyargs<X: AsPythonLitteral, Y: AsPythonLitteral>(
+        &mut self,
+        x: &X,
+        y: &Y,
+        args: &str,
+    ) -> &mut Self;
+    fn show(&mut self) -> &mut Self;
+}
+
+impl MatPlotLib for PythonProgram {
+    fn import_pyplot_as_plt(&mut self) -> &mut Self {
+        self.import_as("matplotlib.pyplot", "plt")
+    }
+
+    fn plot_y<Y: AsPythonLitteral>(&mut self, y: &Y) -> &mut Self {
+        self.write_line(&format!("plt.plot({})", PythonLitteral(y)))
+    }
+
+    fn plot_xy<X: AsPythonLitteral, Y: AsPythonLitteral>(&mut self, x: &X, y: &Y) -> &mut Self {
+        self.write_line(&format!(
+            "plt.plot({},{})",
+            PythonLitteral(x),
+            PythonLitteral(y)
+        ))
+    }
+
+    fn plot_xyargs<X: AsPythonLitteral, Y: AsPythonLitteral>(
+        &mut self,
+        x: &X,
+        y: &Y,
+        args: &str,
+    ) -> &mut Self {
+        self.write_line(&format!(
+            "plt.plot({},{},{})",
+            PythonLitteral(x),
+            PythonLitteral(y),
+            PythonLitteral(args)
+        ))
+    }
+
+    fn semilogy_y<Y: AsPythonLitteral>(&mut self, y: &Y) -> &mut Self {
+        self.write_line(&format!("plt.semilogy({})", PythonLitteral(y)))
+    }
+
+    fn semilogy_xy<X: AsPythonLitteral, Y: AsPythonLitteral>(&mut self, x: &X, y: &Y) -> &mut Self {
+        self.write_line(&format!(
+            "plt.semilogy({},{})",
+            PythonLitteral(x),
+            PythonLitteral(y)
+        ))
+    }
+
+    fn semilogy_xyargs<X: AsPythonLitteral, Y: AsPythonLitteral>(
+        &mut self,
+        x: &X,
+        y: &Y,
+        args: &str,
+    ) -> &mut Self {
+        self.write_line(&format!(
+            "plt.semilogy({},{},{})",
+            PythonLitteral(x),
+            PythonLitteral(y),
+            PythonLitteral(args)
+        ))
+    }
+
+    fn show(&mut self) -> &mut Self {
+        self.write_line("plt.show()")
+    }
+}
+
 pub mod plots {
+    use crate::{AsPythonLitteral, PythonLitteral, PythonProgram};
     use std::io::Write;
-    use crate::{AsPythonLitteral, PythonProgram, PythonLitteral};
 
     pub fn plot_xyargs<X: AsPythonLitteral, Y: AsPythonLitteral>(
         x: &X,
@@ -173,7 +330,7 @@ pub mod plots {
         args: &str,
     ) -> Result<std::process::Output, std::io::Error> {
         let mut program = PythonProgram::new();
-        program.write_line("import matplotlib.pyplot as plt");
+        program.import_as("matplotlib.pyplot", "plt");
         writeln!(
             &program.file,
             "plt.plot({}, {}, {})",
@@ -189,7 +346,7 @@ pub mod plots {
         y: &Y,
     ) -> Result<std::process::Output, std::io::Error> {
         let mut program = PythonProgram::new();
-        program.write_line("import matplotlib.pyplot as plt");
+        program.import_as("matplotlib.pyplot", "plt");
         writeln!(
             &program.file,
             "plt.plot({}, {})",
@@ -201,17 +358,23 @@ pub mod plots {
 
     pub fn plot_y<Y: AsPythonLitteral>(y: &Y) -> Result<std::process::Output, std::io::Error> {
         let mut program = PythonProgram::new();
-        program.write_line("import matplotlib.pyplot as plt");
+        program.import_as("matplotlib.pyplot", "plt");
         writeln!(&program.file, "plt.plot({})", PythonLitteral(y));
         program.write_line("plt.show()").run()
-}
+    }
 }
 
 #[macro_export]
 macro_rules! plot {
-    ($y: expr) => {pycall::plots::plot_y($y)};
-    ($x: expr, $y: expr) => {pycall::plots::plot_xy($x, $y)};
-    ($x: expr, $y: expr, $args: expr) => {pycall::plots::plot_xyargs($x, $y, $args)};
+    ($y: expr) => {
+        pycall::plots::plot_y($y)
+    };
+    ($x: expr, $y: expr) => {
+        pycall::plots::plot_xy($x, $y)
+    };
+    ($x: expr, $y: expr, $args: expr) => {
+        pycall::plots::plot_xyargs($x, $y, $args)
+    };
 }
 
 #[test]
