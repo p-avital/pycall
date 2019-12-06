@@ -285,7 +285,7 @@ impl MatPlotLib for PythonProgram {
             "plt.plot({},{},{})",
             PythonLitteral(x),
             PythonLitteral(y),
-            PythonLitteral(args)
+            args
         ))
     }
 
@@ -311,7 +311,7 @@ impl MatPlotLib for PythonProgram {
             "plt.semilogy({},{},{})",
             PythonLitteral(x),
             PythonLitteral(y),
-            PythonLitteral(args)
+            args
         ))
     }
 
