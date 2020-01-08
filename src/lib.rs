@@ -28,8 +28,26 @@ as_py_lit_impl!(i32, "{}");
 as_py_lit_impl!(i64, "{}");
 as_py_lit_impl!(i128, "{}");
 as_py_lit_impl!(isize, "{}");
-as_py_lit_impl!(f32, "{:.6e}");
-as_py_lit_impl!(f64, "{:.6e}");
+
+impl AsPythonLitteral for f32 {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        if self.is_nan() {
+            write!(f, "float('nan')")
+        } else {
+            write!(f, "{:.6e}", &self)
+        }
+    }
+}
+
+impl AsPythonLitteral for f64 {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        if self.is_nan() {
+            write!(f, "float('nan')")
+        } else {
+            write!(f, "{:.6e}", &self)
+        }
+    }
+}
 
 impl<T: AsPythonLitteral> AsPythonLitteral for Vec<T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
