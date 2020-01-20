@@ -16,6 +16,7 @@ macro_rules! as_py_lit_impl {
 }
 
 as_py_lit_impl!(str, "\"\"\"{}\"\"\"");
+as_py_lit_impl!(String, "\"\"\"{}\"\"\"");
 as_py_lit_impl!(u8, "{}");
 as_py_lit_impl!(u16, "{}");
 as_py_lit_impl!(u32, "{}");
@@ -49,13 +50,35 @@ impl AsPythonLitteral for f64 {
     }
 }
 
+impl<T: AsPythonLitteral> AsPythonLitteral for [T] {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        write!(f, "[")?;
+        for x in self.iter() {
+            write!(f, "{},", PythonLiteral(x))?;
+        }
+        write!(f, "]")
+    }
+}
+
 impl<T: AsPythonLitteral> AsPythonLitteral for Vec<T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         write!(f, "[")?;
         for x in self.iter() {
-            write!(f, "{},", PythonLitteral(x))?;
+            write!(f, "{},", PythonLiteral(x))?;
         }
         write!(f, "]")
+    }
+}
+
+impl<K: AsPythonLitteral, V: AsPythonLitteral> AsPythonLitteral
+    for std::collections::HashMap<K, V>
+{
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        write!(f, "{{")?;
+        for (k, v) in self.iter() {
+            write!(f, "{}:{},", PythonLiteral(k), PythonLiteral(v))?;
+        }
+        write!(f, "}}")
     }
 }
 
@@ -71,8 +94,8 @@ impl std::fmt::Display for Indents {
     }
 }
 
-struct PythonLitteral<'l, T: AsPythonLitteral + ?Sized>(pub &'l T);
-impl<'l, T: AsPythonLitteral + ?Sized> Display for PythonLitteral<'l, T> {
+struct PythonLiteral<'l, T: AsPythonLitteral + ?Sized>(pub &'l T);
+impl<'l, T: AsPythonLitteral + ?Sized> Display for PythonLiteral<'l, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         self.0.fmt(f)
     }
@@ -179,7 +202,7 @@ impl PythonProgram {
             "{}{} = {}",
             self.indents,
             name,
-            PythonLitteral(value)
+            PythonLiteral(value)
         )
         .unwrap();
         self
@@ -286,14 +309,14 @@ impl MatPlotLib for PythonProgram {
     }
 
     fn plot_y<Y: AsPythonLitteral>(&mut self, y: &Y) -> &mut Self {
-        self.write_line(&format!("plt.plot({})", PythonLitteral(y)))
+        self.write_line(&format!("plt.plot({})", PythonLiteral(y)))
     }
 
     fn plot_xy<X: AsPythonLitteral, Y: AsPythonLitteral>(&mut self, x: &X, y: &Y) -> &mut Self {
         self.write_line(&format!(
             "plt.plot({},{})",
-            PythonLitteral(x),
-            PythonLitteral(y)
+            PythonLiteral(x),
+            PythonLiteral(y)
         ))
     }
 
@@ -305,21 +328,21 @@ impl MatPlotLib for PythonProgram {
     ) -> &mut Self {
         self.write_line(&format!(
             "plt.plot({},{},{})",
-            PythonLitteral(x),
-            PythonLitteral(y),
+            PythonLiteral(x),
+            PythonLiteral(y),
             args
         ))
     }
 
     fn semilogy_y<Y: AsPythonLitteral>(&mut self, y: &Y) -> &mut Self {
-        self.write_line(&format!("plt.semilogy({})", PythonLitteral(y)))
+        self.write_line(&format!("plt.semilogy({})", PythonLiteral(y)))
     }
 
     fn semilogy_xy<X: AsPythonLitteral, Y: AsPythonLitteral>(&mut self, x: &X, y: &Y) -> &mut Self {
         self.write_line(&format!(
             "plt.semilogy({},{})",
-            PythonLitteral(x),
-            PythonLitteral(y)
+            PythonLiteral(x),
+            PythonLiteral(y)
         ))
     }
 
@@ -331,8 +354,8 @@ impl MatPlotLib for PythonProgram {
     ) -> &mut Self {
         self.write_line(&format!(
             "plt.semilogy({},{},{})",
-            PythonLitteral(x),
-            PythonLitteral(y),
+            PythonLiteral(x),
+            PythonLiteral(y),
             args
         ))
     }
@@ -343,7 +366,7 @@ impl MatPlotLib for PythonProgram {
 }
 
 pub mod plots {
-    use crate::{AsPythonLitteral, PythonLitteral, PythonProgram};
+    use crate::{AsPythonLitteral, PythonLiteral, PythonProgram};
     use std::io::Write;
 
     pub fn plot_xyargs<X: AsPythonLitteral, Y: AsPythonLitteral>(
@@ -356,9 +379,9 @@ pub mod plots {
         writeln!(
             &program.file,
             "plt.plot({}, {}, {})",
-            PythonLitteral(x),
-            PythonLitteral(y),
-            PythonLitteral(args)
+            PythonLiteral(x),
+            PythonLiteral(y),
+            PythonLiteral(args)
         );
         program.write_line("plt.show()").run()
     }
@@ -372,8 +395,8 @@ pub mod plots {
         writeln!(
             &program.file,
             "plt.plot({}, {})",
-            PythonLitteral(x),
-            PythonLitteral(y),
+            PythonLiteral(x),
+            PythonLiteral(y),
         );
         program.write_line("plt.show()").run()
     }
@@ -381,7 +404,7 @@ pub mod plots {
     pub fn plot_y<Y: AsPythonLitteral>(y: &Y) -> Result<std::process::Output, std::io::Error> {
         let mut program = PythonProgram::new();
         program.import_as("matplotlib.pyplot", "plt");
-        writeln!(&program.file, "plt.plot({})", PythonLitteral(y));
+        writeln!(&program.file, "plt.plot({})", PythonLiteral(y));
         program.write_line("plt.show()").run()
     }
 }
