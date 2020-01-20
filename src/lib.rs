@@ -129,6 +129,10 @@ impl PythonProgram {
         }
     }
 
+    pub fn save_as<P: AsRef<std::path::Path>>(&self, path: P) -> Result<u64, std::io::Error> {
+        std::fs::copy(self.file.path(), path)
+    }
+
     /// Runs the program using python3
     pub fn run(&self) -> Result<std::process::Output, std::io::Error> {
         std::process::Command::new("python3")
